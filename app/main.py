@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from .database import Base, engine, get_db
 from .seed import seed
-from .routers import items, qa
+from .routers import items, qa, chat_ui
 
 Base.metadata.create_all(bind=engine)
 
@@ -25,6 +25,7 @@ def init(db: Session = Depends(get_db)):
 
 app.include_router(qa.router)
 app.include_router(items.router)
+app.include_router(chat_ui.router)
 
 @app.get("/")
 def root():
