@@ -2,98 +2,148 @@
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
-router = APIRouter(tags=["ui"])
+router = APIRouter(prefix="/chat", tags=["chat"])
 
-HTML = """
+@router.get("", response_class=HTMLResponse)
+def chat_page():
+    return HTMLResponse(content="""
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Company Q&A Chat</title>
+  <title>Agent Chat</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: #0f172a; color: #e2e8f0; }
-    .wrap { max-width: 820px; margin: 0 auto; padding: 24px; }
-    h1 { font-size: 20px; margin: 0 0 16px; color: #93c5fd; }
-    .chat { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 16px; min-height: 60vh; }
-    .msg { margin: 12px 0; line-height: 1.45; }
-    .user { color: #fef3c7; }
-    .bot { color: #d1fae5; }
-    .meta { font-size: 12px; color: #9ca3af; margin-top: 6px; white-space: pre-wrap; }
-    form { display: flex; gap: 8px; margin-top: 12px; }
-    input[type=text] { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #1f2937; background: #0b1220; color: #e5e7eb; }
-    button { padding: 12px 16px; border-radius: 8px; border: 0; background: #2563eb; color: white; cursor: pointer; }
-    button:disabled { opacity: .6; cursor: not-allowed; }
-    details { margin-top: 6px; }
-    summary { cursor: pointer; }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    :root { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+    body { margin: 0; background: #0b0f14; color: #e8eef6; }
+    .wrap { max-width: 880px; margin: 32px auto; padding: 0 16px; }
+    .card { background:#121826; border:1px solid #22304a; border-radius:12px; overflow:hidden; }
+    .head { padding:16px 20px; border-bottom:1px solid #22304a; display:flex; gap:12px; align-items:center; }
+    .badge { font-size:12px; padding:2px 8px; border-radius:999px; background:#1e2a3f; color:#a7c0ff; }
+    .log  { padding:16px 20px; height:56vh; overflow:auto; }
+    .row  { margin:12px 0; }
+    .u { color:#b8ffd8; }
+    .a { color:#ffd29e; }
+    .bar { display:flex; gap:8px; padding:12px; border-top:1px solid #22304a; background:#0d1320; }
+    input[type="text"] { flex:1; padding:12px; border-radius:10px; border:1px solid #22304a; background:#0b0f14; color:#e8eef6; outline:none; }
+    button { padding:10px 14px; border-radius:10px; border:1px solid #2b3a5a; background:#18233a; color:#e8eef6; cursor:pointer; }
+    button:hover { background:#22304a; }
+    .row pre { margin:6px 0 0; white-space:pre-wrap; word-wrap:break-word; }
+    .switch { margin-left:auto; display:flex; gap:6px; align-items:center; }
+    select { background:#0b0f14; color:#e8eef6; border:1px solid #22304a; border-radius:8px; padding:6px 8px; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Company Q&A Chat</h1>
-    <div id="chat" class="chat"></div>
-    <form id="form">
-      <input id="input" type="text" placeholder="Ask about employees, departments, projects, attendance..." required />
-      <button id="send" type="submit">Send</button>
-    </form>
+    <div class="card">
+      <div class="head">
+        <div><strong>Company Data Assistant</strong></div>
+        <span class="badge">LangChain tools</span>
+        <div class="switch">
+          <label for="backend">Backend:</label>
+          <select id="backend">
+            <option value="agent" selected>/qa/ask-agent</option>
+            <option value="fast">/qa/ask-fast (classified)</option>
+          </select>
+        </div>
+      </div>
+      <div id="log" class="log"></div>
+      <div class="bar">
+        <input id="q" type="text" placeholder="Ask e.g. 'Who joined Engineering after 2024-01-01?'" />
+        <button id="send">Send</button>
+        <button id="clear">Clear</button>
+      </div>
+    </div>
   </div>
 
-  <script>
-    const chatEl = document.getElementById('chat');
-    const formEl = document.getElementById('form');
-    const inputEl = document.getElementById('input');
-    const sendEl = document.getElementById('send');
+<script>
+(() => {
+  const log = document.getElementById('log');
+  const q   = document.getElementById('q');
+  const sendBtn = document.getElementById('send');
+  const clearBtn = document.getElementById('clear');
+  const backendSel = document.getElementById('backend');
 
-    function addMsg(role, text, meta) {
-      const div = document.createElement('div');
-      div.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
-      div.innerHTML = '<strong>' + (role === 'user' ? 'You' : 'Assistant') + ':</strong> ' + text;
-      if (meta) {
-        const md = document.createElement('div');
-        md.className = 'meta';
-        md.innerHTML = meta;
-        div.appendChild(md);
+  // simple in-memory history for /qa/ask-agent
+  let history = []; // [{role:'user'|'assistant', content:'...'}]
+
+  function addRow(role, text) {
+    const div = document.createElement('div');
+    div.className = 'row ' + (role === 'user' ? 'u' : 'a');
+    const who = role === 'user' ? 'You' : 'Assistant';
+    div.innerHTML = `<div><strong>${who}:</strong></div><pre>${escapeHtml(text || '')}</pre>`;
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function escapeHtml(str) {
+    return (str || '').replace(/[&<>"']/g, m => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'
+    }[m]));
+  }
+
+  async function ask(question) {
+    const mode = backendSel.value; // 'agent' or 'sql'
+    if (mode === 'agent' || mode === 'fast') {
+      // New agent endpoint
+      const url = mode === 'fast' ? '/qa/ask-fast' : '/qa/ask-agent';
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, history })
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error('HTTP ' + res.status + ': ' + txt);
       }
-      chatEl.appendChild(div);
-      chatEl.scrollTop = chatEl.scrollHeight;
+      const data = await res.json();
+      return data.answer || '';
+    } else {
+      // Legacy SQL endpoint
+      const res = await fetch('/qa/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question })
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error('HTTP ' + res.status + ': ' + txt);
+      }
+      const data = await res.json();
+      // unify to a single string for display if your legacy schema differs
+      return (data.answer || data.result || JSON.stringify(data));
     }
+  }
 
-    formEl.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const q = inputEl.value.trim();
-      if (!q) return;
-      inputEl.value = '';
-      addMsg('user', q);
-      sendEl.disabled = true;
+  async function onSend() {
+    const text = q.value.trim();
+    if (!text) return;
+    addRow('user', text);
+    history.push({ role: 'user', content: text });
+    q.value = '';
+    try {
+      const answer = await ask(text);
+      addRow('assistant', answer);
+      history.push({ role: 'assistant', content: answer });
+    } catch (e) {
+      const msg = 'Error: ' + (e?.message || e);
+      addRow('assistant', msg);
+      history.push({ role: 'assistant', content: msg });
+    }
+  }
 
-      try {
-        const res = await fetch('/qa/ask', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ question: q })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Request failed');
+  function onClear() {
+    log.innerHTML = '';
+    history = [];
+  }
 
-        const meta =
-          '<details><summary>Details</summary>' +
-          '<div><strong>SQL</strong></div><code>' + (data.sql || '').replace(/</g,'&lt;') + '</code>' +
-          '<div style="margin-top:6px;"><strong>Rows</strong></div><code>' + JSON.stringify(data.rows, null, 2).replace(/</g,'&lt;') + '</code>' +
-          '</details>';
-
-        addMsg('bot', data.answer || '(no answer)', meta);
-      } catch (err) {
-        addMsg('bot', 'Error: ' + err.message);
-      } finally {
-        sendEl.disabled = false;
-      }
-    });
-  </script>
+  sendBtn.addEventListener('click', onSend);
+  clearBtn.addEventListener('click', onClear);
+  q.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') onSend();
+  });
+})();
+</script>
 </body>
 </html>
-"""
-
-@router.get("/chat", response_class=HTMLResponse)
-def chat_ui():
-    return HTML
+""")

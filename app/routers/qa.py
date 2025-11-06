@@ -1,40 +1,37 @@
 # app/routers/qa.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+from typing import List, Dict, Any
+
 from sqlalchemy.orm import Session
 from ..database import get_db
-from ..prompts import SCHEMA_GUIDE, ANSWER_GUIDE
-from ..llm import generate_sql, explain_answer
-from ..sqlguard import is_safe_select, ensure_limit
-from ..utils import run_sql, to_json_str
+
+# Legacy agent (generic) – keep if you want:
+from ..agent import make_executor
+
+# Fast orchestrator (domain-aware)
+from ..orchestrator import make_fast_executor
 
 router = APIRouter(prefix="/qa", tags=["qa"])
 
-class AskReq(BaseModel):
-    question: str = Field(..., min_length=3, max_length=500)
 
-class AskResp(BaseModel):
-    sql: str
-    rows: list[dict]
+class AskAgentReq(BaseModel):
+    question: str = Field(..., min_length=2, max_length=500)
+    history: List[Dict[str, Any]] = Field(default_factory=list)
+
+class AskAgentResp(BaseModel):
     answer: str
 
-@router.post("/ask", response_model=AskResp)
-def ask(req: AskReq, db: Session = Depends(get_db)):
-    # 1) LLM -> SQL
-    sql_raw = generate_sql(SCHEMA_GUIDE, req.question)
 
-    # 2) Guardrails
-    if not is_safe_select(sql_raw):
-        raise HTTPException(status_code=400, detail="Unsafe or invalid SQL produced.")
-    sql = ensure_limit(sql_raw)
+@router.post("/ask-agent", response_model=AskAgentResp)
+def ask_agent(req: AskAgentReq, db: Session = Depends(get_db)):
+    executor = make_executor(db)   # generic agent (your existing agent.py)
+    result = executor({"input": req.question, "chat_history": req.history})
+    return AskAgentResp(answer=result.get("output", ""))
 
-    # 3) Execute
-    try:
-        rows = run_sql(db, sql)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"SQL execution error: {e}")
 
-    # 4) LLM -> natural answer
-    answer = explain_answer(req.question, sql, to_json_str(rows))
-
-    return AskResp(sql=sql, rows=rows, answer=answer)
+@router.post("/ask-fast", response_model=AskAgentResp)
+def ask_fast(req: AskAgentReq, db: Session = Depends(get_db)):
+    executor = make_fast_executor(db)  # domain-aware orchestrator
+    result = executor({"input": req.question, "chat_history": req.history})
+    return AskAgentResp(answer=result.get("output", ""))
